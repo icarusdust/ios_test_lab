@@ -1,0 +1,111 @@
+definitions:
+  cool_vars: &cool_vars
+    meow: 'testing'
+  instance_mac_pro: &instance_mac_pro
+    instance_type: mac_pro
+    max_build_duration: 120
+  env_versions: &env_versions
+    flutter: stable
+    xcode: 13.3.1
+    cocoapods: default
+  triggering:
+    events:
+      - tag
+    tag_patterns:
+      - pattern: 'v1.2'
+  environment:
+    automatic_ios_signing: &automatic_ios_signing
+      groups:
+        - ios
+        - firebase_credentials
+      vars:
+        BUNDLE_ID: "com.example.testLabIos"
+        XCODE_WORKSPACE: "Runner.xcworspace"
+        XCODE_SCHEME: "Runner"
+workflows:
+  ios-workflow:
+    name: iOS Workflow
+    <<: *instance_mac_pro
+    environment:
+        <<: *env_versions
+        <<: *automatic_ios_signing
+#         vars:
+#            <<: *cool_vars
+      
+#     instance_type: mac_pro
+#     max_build_duration: 120
+#     environment:
+#       groups:
+#         - appstore_credentials
+#       vars:
+#         XCODE_WORKSPACE: "Runner.xcworkspace"
+#         XCODE_SCHEME: "Runner"                
+#         BUNDLE_ID: "com.example.kobitionIntegration"
+#         APP_STORE_ID: 1625065284
+
+# #         APPPATH: "build/ios/ipa/kobition_integration.ipa"
+# #         APP_KEY: "123"
+
+#       flutter: stable
+#       xcode: edge
+#       cocoapods: default
+    scripts:
+#       - name: Firebase
+#         script: |
+#           flutter pub add firebase_core
+#           flutter pub add firebase_messaging
+
+    
+      - name: Set up keychain to be used for codesigning using Codemagic CLI 'keychain' command
+        script: |
+          keychain initialize
+#         /usr/local/bin/docker --version
+#         echo $CREDS
+#         echo $Test
+      - name: Fetch signing files
+        script: |
+          app-store-connect fetch-signing-files $BUNDLE_ID --type IOS_APP_ADHOC --create
+          app-store-connect fetch-signing-files "com.mars.RunnerTests.xctrunner" --type IOS_APP_ADHOC --create
+      - name: Use system default keychain
+        script: |
+          keychain add-certificates
+#       - *codesign
+      - name: Set up code signing settings on Xcode project
+        script: |
+          xcode-project use-profiles
+      - name: Get Flutter packages
+        script: |
+          cd . && flutter packages pub get         
+      - name: Install pods
+        script: |
+          find . -name "Podfile" -execdir pod install \;
+#       - name: Flutter build ipa and automatic versioning
+#         script: |
+#           flutter build ipa --release \
+#           --export-options-plist=/Users/builder/export_options.plist
+     
+      - name: Build test package
+        script: |
+          flutter build ios integration_test/app_test.dart --release
+          pushd ios
+          xcodebuild -workspace Runner.xcworkspace -scheme Runner -config Flutter/Runner.xcworkspace -derivedDataPath ./build/ios_integ -sdk iphoneos build-for-testing 
+          popd
+          pushd /Users/builder/clone/ios/build/ios_integ/Build/Products
+          zip -r "ios_tests.zip" "Release-iphoneos" "Runner_iphoneos15.4-arm64.xctestrun"
+          popd
+      - name: Run Firebase Test Lab tests
+        script: |
+          echo $GCLOUD_KEY_FILE > ./gcloud_key_file.json
+          gcloud auth activate-service-account --key-file=gcloud_key_file.json
+          gcloud --quiet config set project $FIREBASE_PROJECT 
+          gcloud firebase test ios run --test "/Users/builder/clone/ios/build/ios_integ/Build/Products/ios_tests.zip" \
+            --device model=iphone11pro,version=14.7,locale=en_US,orientation=portrait \
+            --xcode-version=13.3.1 \
+            --timeout 10m
+            
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+      - /Users/builder/clone/ios/build/ios_integ/Build/Products/ios_tests.zip
